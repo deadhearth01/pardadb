@@ -117,20 +117,32 @@ class Engine:
 
         # inference guard
         if role != "admin":
-            # ORDER BY on a set operation (UNION / INTERSECT / EXCEPT) refers to its outputs: check their lineage
+            # ORDER BY on a set operation (UNION / INTERSECT / EXCEPT) may only name an output (bare name or position)
             for setop in tree.find_all(exp.SetOperation):
                 order = setop.args.get("order")
-                for c in (order.find_all(exp.Column) if order else []):
+                outputs = setop.named_selects
+                for item in (order.expressions if order else []):
+                    e = item.this if isinstance(item, exp.Ordered) else item
+                    if isinstance(e, exp.Literal) and e.is_int and 1 <= int(e.this) <= len(outputs):
+                        name = outputs[int(e.this) - 1]
+                    elif isinstance(e, exp.Column) and not e.table and e.name in outputs:
+                        name = e.name
+                    else:
+                        raise Blocked(f"ORDER BY {e.sql()} on a set operation must name an output column; query refused")
                     try:
-                        srcs = _source_columns(lineage(c.name, setop, schema=self.schema, dialect=self.b.dialect))
+                        srcs = _source_columns(lineage(name, setop, schema=self.schema, dialect=self.b.dialect))
                     except Exception:
-                        raise Blocked(f"cannot resolve ORDER BY column {c.sql()}; query refused")
+                        raise Blocked(f"cannot resolve ORDER BY {name}; query refused")
                     for t, cname in srcs:
                         info = self.tag_of(t, cname)
                         if info and self.strategy(role, info) != "FULL":
                             raise Blocked(f"inference guard: role '{role}' cannot sort on {t}.{cname} ({info['tag']})")
             root = build_scope(tree)
-            for scope in root.traverse():
+            scopes = list(root.traverse())
+            covered = {id(sc.expression) for sc in scopes}
+            if any(id(sel) not in covered for sel in tree.find_all(exp.Select)):
+                raise Blocked("query contains a SELECT the inference guard cannot analyse; query refused")
+            for scope in scopes:
                 for clause in (exp.Where, exp.Having, exp.Order, exp.Group, exp.Join, exp.Window, exp.Qualify):
                     for node in scope.expression.find_all(clause):
                         for c in node.find_all(exp.Column):
