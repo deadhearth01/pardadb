@@ -114,6 +114,11 @@ class Engine:
             if name in BANNED_FUNCS:
                 raise Blocked(f"function {name} is blocked")
         tree = qualify(tree, schema=self.schema, dialect=self.b.dialect)
+        # lineage is looked up by output name, so names must be unique at every level
+        for node in [tree, *tree.find_all(exp.Select, exp.SetOperation)]:
+            names = [n.lower() for n in node.named_selects]
+            if len(names) != len(set(names)):
+                raise Blocked("duplicate output column names; give every output a unique alias")
 
         # inference guard
         if role != "admin":
