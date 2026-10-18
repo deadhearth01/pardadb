@@ -83,17 +83,22 @@ class Engine:
             return "FULL"
         return POLICY[info["tag"]][role]
 
-    def _hash_safe(self, col, clause, scope):
+    def _base_hash(self, col, scope, role):
+        """Column read straight from a base table (no sub-query hop) whose strategy for this role is HASH."""
+        src = scope.sources.get(col.table)
+        if not isinstance(src, exp.Table):
+            return False
+        info = self.tag_of(src.name, col.name)
+        return bool(info) and self.strategy(role, info) == "HASH"
+
+    def _hash_safe(self, col, clause, scope, role):
+        if not self._base_hash(col, scope, role):
+            return False
         if isinstance(clause, exp.Group) and col.parent is clause:
             return True
         if isinstance(clause, exp.Join) and isinstance(col.parent, exp.EQ):
             other = col.parent.expression if col.parent.this is col else col.parent.this
-            if isinstance(other, exp.Column):
-                for t, c in _resolve(other, scope, self.schema, self.b.dialect):
-                    info = self.tag_of(t, c)
-                    if not info:
-                        return False
-                return True
+            return isinstance(other, exp.Column) and self._base_hash(other, scope, role)
         return False
 
     def plan(self, sql, role):
@@ -112,20 +117,35 @@ class Engine:
 
         # inference guard
         if role != "admin":
+            # ORDER BY on a set operation (UNION / INTERSECT / EXCEPT) refers to its outputs: check their lineage
+            for setop in tree.find_all(exp.SetOperation):
+                order = setop.args.get("order")
+                for c in (order.find_all(exp.Column) if order else []):
+                    try:
+                        srcs = _source_columns(lineage(c.name, setop, schema=self.schema, dialect=self.b.dialect))
+                    except Exception:
+                        raise Blocked(f"cannot resolve ORDER BY column {c.sql()}; query refused")
+                    for t, cname in srcs:
+                        info = self.tag_of(t, cname)
+                        if info and self.strategy(role, info) != "FULL":
+                            raise Blocked(f"inference guard: role '{role}' cannot sort on {t}.{cname} ({info['tag']})")
             root = build_scope(tree)
             for scope in root.traverse():
                 for clause in (exp.Where, exp.Having, exp.Order, exp.Group, exp.Join, exp.Window, exp.Qualify):
                     for node in scope.expression.find_all(clause):
                         for c in node.find_all(exp.Column):
-                            if c.find_ancestor(exp.Select) is not scope.expression:
-                                continue  # belongs to a sub-query; checked when that scope is traversed
+                            owner = c.find_ancestor(exp.Select)
+                            if owner is None:
+                                continue  # set-operation ORDER BY: checked above via output lineage
+                            if owner is not scope.expression:
+                                continue  # belongs to a sub-query scope, which traverse() also visits
                             for t, cname in _resolve(c, scope, self.schema, self.b.dialect):
                                 info = self.tag_of(t, cname)
                                 strat = self.strategy(role, info) if info else "FULL"
                                 if strat == "FULL":
                                     continue
                                 # deterministic hashes may be grouped or equi-joined as bare columns, nothing else
-                                if strat == "HASH" and self._hash_safe(c, node, scope):
+                                if strat == "HASH" and self._hash_safe(c, node, scope, role):
                                     continue
                                 raise Blocked(
                                     f"inference guard: role '{role}' cannot filter, sort, group or join on "
