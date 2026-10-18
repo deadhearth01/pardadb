@@ -3,3 +3,5 @@ __pycache__/
 *.sqlite
 catalog.json
 audit.jsonl
+.hmac_key
+.mysql_reader

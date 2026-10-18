@@ -7,7 +7,21 @@ import re
 import shutil
 import subprocess
 
-HMAC_KEY = os.environ.get("PARDADB_HMAC_KEY", "demo-key-change-me").encode()
+def _load_key():
+    if os.environ.get("PARDADB_HMAC_KEY"):
+        return os.environ["PARDADB_HMAC_KEY"].encode()
+    path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".hmac_key")
+    if not os.path.exists(path):
+        import secrets
+
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w") as f:
+            f.write(secrets.token_hex(32))
+    with open(path) as f:
+        return f.read().strip().encode()
+
+
+HMAC_KEY = _load_key()
 
 
 def full(v, kind=None):

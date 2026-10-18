@@ -86,7 +86,10 @@ def seed_sqlite(path=SQLITE_PATH):
     con.close()
 
 
-def seed_mysql(cfg=MYSQL):
+def seed_mysql(cfg=None):
+    """Needs an admin account (PARDADB_MYSQL_ADMIN_USER / _PASSWORD, default root) to create the schema."""
+    cfg = cfg or dict(MYSQL, user=os.environ.get("PARDADB_MYSQL_ADMIN_USER", "root"),
+                      password=os.environ.get("PARDADB_MYSQL_ADMIN_PASSWORD", ""))
     import pymysql
 
     db = cfg["database"]
@@ -100,4 +103,18 @@ def seed_mysql(cfg=MYSQL):
         cur.execute(d)
     cur.executemany("INSERT INTO customers VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)", c)
     cur.executemany("INSERT INTO transactions VALUES (%s,%s,%s,%s,%s)", t)
+    # the engine connects as a SELECT-only account (no FILE, no writes); password kept in a 0600 file
+    import secrets
+
+    from .backends import READER_FILE
+
+    pw = secrets.token_urlsafe(18)
+    cur.execute("DROP USER IF EXISTS 'pardadb_reader'@'localhost'")
+    cur.execute("CREATE USER 'pardadb_reader'@'localhost' IDENTIFIED BY %s", (pw,))
+    cur.execute(f"GRANT SELECT ON `{db}`.* TO 'pardadb_reader'@'localhost'")
+    if os.path.exists(READER_FILE):
+        os.remove(READER_FILE)
+    fd = os.open(READER_FILE, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(pw)
     con.close()

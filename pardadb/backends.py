@@ -5,10 +5,22 @@ import sqlite3
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SQLITE_PATH = os.environ.get("PARDADB_SQLITE", os.path.join(HERE, "bank_demo.sqlite"))
+READER_FILE = os.path.join(HERE, ".mysql_reader")
+
+
+def _reader_password():
+    if os.environ.get("PARDADB_MYSQL_PASSWORD") is not None:
+        return os.environ["PARDADB_MYSQL_PASSWORD"]
+    if os.path.exists(READER_FILE):
+        with open(READER_FILE) as f:
+            return f.read().strip()
+    return ""
+
+
 MYSQL = dict(
     host=os.environ.get("PARDADB_MYSQL_HOST", "127.0.0.1"),
-    user=os.environ.get("PARDADB_MYSQL_USER", "root"),
-    password=os.environ.get("PARDADB_MYSQL_PASSWORD", ""),
+    user=os.environ.get("PARDADB_MYSQL_USER", "pardadb_reader"),
+    password=_reader_password(),
     database=os.environ.get("PARDADB_MYSQL_DB", "pardadb_demo"),
 )
 
@@ -72,9 +84,10 @@ class MySQLBackend(Backend):
     dialect = "mysql"
     name = "MySQL"
 
-    def __init__(self, cfg=MYSQL):
+    def __init__(self, cfg=None):
         import pymysql
 
+        cfg = cfg or dict(MYSQL, password=_reader_password())
         self.db = cfg["database"]
         self.conn = pymysql.connect(**cfg, autocommit=True)
         self.conn.cursor().execute("SET SESSION TRANSACTION READ ONLY")

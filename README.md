@@ -12,8 +12,8 @@ Built by Team AVNI for the Talent AP Mega Hackathon 2026, Problem Statement 1: *
 |---|---|
 | **Automated PII scanner** | Samples 25 values per column and classifies them with `parda scan` (Luhn / Verhoeff / PAN rules plus an on-device AI model). Match rate, header hints and a cardinality check produce a tag (`PII_HIGH`, `PII_MEDIUM`, `FINANCIAL_CONFIDENTIAL`, `PII_FREE_TEXT`) with confidence and evidence. |
 | **Dynamic masking engine** | Every query is parsed with [sqlglot](https://github.com/tobymao/sqlglot), `SELECT *` is expanded, and each output column is traced back to its source column (lineage through aliases, functions, joins and sub-queries). Results are masked per `tag × role` policy. |
-| **Inference guard** | Non-admin roles cannot filter, sort, group or join on columns they may not see (for example `WHERE card_no LIKE '4111%'`), so masked values cannot be guessed. Hashed columns may still be grouped and joined, since equal values hash the same. Write statements are refused. |
-| **Multiple databases** | SQLite and MySQL through one adapter interface, with read-only connections. |
+| **Inference guard** | Non-admin roles cannot filter, sort, group or join on columns they may not see (for example `WHERE card_no LIKE '4111%'`), so masked values cannot be guessed. Hashed columns may only be grouped or equi-joined as bare columns against another tagged column. Unresolvable columns, writes, `SELECT ... INTO` and file/system functions (`LOAD_FILE`, `SLEEP`, …) are refused (fail-closed). |
+| **Multiple databases** | SQLite and MySQL through one adapter interface. SQLite opens read-only; MySQL uses a SELECT-only `pardadb_reader` account created by `seed`. |
 | **Proof and audit** | SHA-256 fingerprints of every raw table before and after; every query (including blocked ones) goes to `audit.jsonl`. |
 | **Demo interface** | Terminal UI with live role switching and preset bypass attempts. |
 
@@ -26,7 +26,7 @@ Built by Team AVNI for the Talent AP Mega Hackathon 2026, Problem Statement 1: *
 | `FINANCIAL_CONFIDENTIAL` (balance, amount) | full | redact | bucket (`1L-10L`) |
 | `PII_FREE_TEXT` (notes) | full | PII inside the text replaced by parda | same |
 
-Values derived from a sensitive column (for example `SUBSTR(card_no, 1, 9)`) are always fully redacted for non-admin roles.
+Any value derived from a masked column (for example `SUBSTR(card_no, 1, 9)`, `UPPER(full_name)`, `balance * 1`) is fully redacted for non-admin roles.
 
 ## Run it
 
@@ -39,7 +39,7 @@ python -m venv .venv && .venv/bin/pip install -r requirements.txt
 .venv/bin/python -m pardadb demo     # scripted walkthrough
 ```
 
-MySQL connection settings come from `PARDADB_MYSQL_HOST`, `PARDADB_MYSQL_USER`, `PARDADB_MYSQL_PASSWORD` and `PARDADB_MYSQL_DB` (default `pardadb_demo`). Set `PARDADB_HMAC_KEY` to your own secret for hashing.
+`seed` connects to MySQL as an admin (`PARDADB_MYSQL_ADMIN_USER` / `PARDADB_MYSQL_ADMIN_PASSWORD`, default `root` with no password), creates the `pardadb_demo` schema and a SELECT-only `pardadb_reader` account, and stores its random password in `.mysql_reader` (mode 0600). The engine connects as that reader (override with `PARDADB_MYSQL_HOST`, `PARDADB_MYSQL_USER`, `PARDADB_MYSQL_PASSWORD`, `PARDADB_MYSQL_DB`). The HMAC key for hashing comes from `PARDADB_HMAC_KEY`, or a random key generated on first run in `.hmac_key` (mode 0600).
 
 ### Terminal UI keys
 
